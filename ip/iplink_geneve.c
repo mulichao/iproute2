@@ -22,6 +22,7 @@ static void print_explain(FILE *f)
 	fprintf(f,
 		"Usage: ... geneve id VNI\n"
 		"		remote ADDR\n"
+		"               [ aid AID ]\n"
 		"		[ ttl TTL ]\n"
 		"		[ tos TOS ]\n"
 		"		[ df DF ]\n"
@@ -34,6 +35,7 @@ static void print_explain(FILE *f)
 		"\n"
 		"Where:	VNI   := 0-16777215\n"
 		"	ADDR  := IP_ADDRESS\n"
+		"       AID   := 0-(2^64 - 1)\n"
 		"	TOS   := { NUMBER | inherit }\n"
 		"	TTL   := { 1..255 | auto | inherit }\n"
 		"	DF    := { unset | set | inherit }\n"
@@ -70,6 +72,7 @@ static int geneve_parse_opt(struct link_util *lu, int argc, char **argv,
 	__u8 udp6zerocsumtx = 0;
 	__u8 udp6zerocsumrx = 0;
 	__u64 attrs = 0;
+	__u64 aid = 0;
 	bool set_op = (n->nlmsg_type == RTM_NEWLINK &&
 		       !(n->nlmsg_flags & NLM_F_CREATE));
 
@@ -83,6 +86,12 @@ static int geneve_parse_opt(struct link_util *lu, int argc, char **argv,
 			if (get_u32(&vni, *argv, 0) ||
 			    vni >= 1u << 24)
 				invarg("invalid id", *argv);
+		} else if (!matches(*argv, "aid")) {
+			NEXT_ARG();
+			check_duparg(&attrs, IFLA_GENEVE_AID, "aid", *argv);
+			if (get_u64(&aid, *argv, 0))
+				invarg("invalid id", *argv);
+			aid = htobe64(aid);
 		} else if (!matches(*argv, "remote")) {
 			NEXT_ARG();
 			check_duparg(&attrs, IFLA_GENEVE_REMOTE, "remote",
@@ -193,6 +202,13 @@ static int geneve_parse_opt(struct link_util *lu, int argc, char **argv,
 		argc--, argv++;
 	}
 
+	if (GENEVE_ATTRSET(attrs, IFLA_GENEVE_ID) &&
+	    GENEVE_ATTRSET(attrs, IFLA_GENEVE_AID) &&
+	    vni != 0) {
+		fprintf(stderr, "geneve: both id and aid cannot be specified\n");
+		return -1;
+	}
+
 	if (metadata && GENEVE_ATTRSET(attrs, IFLA_GENEVE_ID)) {
 		fprintf(stderr, "geneve: both 'external' and vni cannot be specified\n");
 		return -1;
@@ -216,6 +232,9 @@ static int geneve_parse_opt(struct link_util *lu, int argc, char **argv,
 	}
 
 	addattr32(n, 1024, IFLA_GENEVE_ID, vni);
+	if (GENEVE_ATTRSET(attrs, IFLA_GENEVE_AID)) {
+		addattr64(n, 1024, IFLA_GENEVE_AID, aid);
+	}
 	if (is_addrtype_inet(&daddr)) {
 		int type = (daddr.family == AF_INET) ? IFLA_GENEVE_REMOTE :
 						       IFLA_GENEVE_REMOTE6;
@@ -246,6 +265,7 @@ static void geneve_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[])
 	__u32 vni;
 	__u8 ttl = 0;
 	__u8 tos = 0;
+	__u64 aid;
 
 	if (!tb)
 		return;
@@ -261,6 +281,11 @@ static void geneve_print_opt(struct link_util *lu, FILE *f, struct rtattr *tb[])
 
 	vni = rta_getattr_u32(tb[IFLA_GENEVE_ID]);
 	print_uint(PRINT_ANY, "id", "id %u ", vni);
+
+	if (tb[IFLA_GENEVE_AID]) {
+		aid = rta_getattr_u64(tb[IFLA_GENEVE_AID]);
+		print_u64(PRINT_ANY, "aid", "aid %llu ", aid);
+	}
 
 	if (tb[IFLA_GENEVE_REMOTE]) {
 		__be32 addr = rta_getattr_u32(tb[IFLA_GENEVE_REMOTE]);
